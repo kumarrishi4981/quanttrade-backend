@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: quanttrade-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quanttrade-db
+          property: connectionURI
+      - key: DB_USERNAME
+        fromDatabase:
+          name: quanttrade-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: quanttrade-db
+          property: password
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://quanttrade.vercel.app
+
+databases:
+  - name: quanttrade-db
+    plan: free
+    databaseName: quanttrade
+    user: quanttrade
