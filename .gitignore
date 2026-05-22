@@ -1,5 +1,6 @@
-# Compiled class files
+# Maven
 target/
+!.mvn/wrapper/maven-wrapper.jar
 
 # IDE
 .idea/
@@ -11,11 +12,15 @@ target/
 .DS_Store
 Thumbs.db
 
-# H2 Database files
+# H2 Database (local dev only)
 data/
-
-# Maven wrapper
-.mvn/wrapper/maven-wrapper.jar
+*.db
+*.mv.db
+*.trace.db
 
 # Logs
 *.log
+logs/
+
+# Environment
+.env
