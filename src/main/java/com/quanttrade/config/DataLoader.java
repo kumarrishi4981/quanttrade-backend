@@ -6,6 +6,7 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -28,6 +29,7 @@ public class DataLoader implements CommandLineRunner {
     }
 
     @Override
+    @Transactional
     public void run(String... args) {
         long currentCount = stockRepository.count();
         if (currentCount >= 28) {
@@ -37,11 +39,23 @@ public class DataLoader implements CommandLineRunner {
 
         System.out.println("[QuantTrade] Seeding database with stock data...");
 
-        // If partially seeded, wipe the database first to ensure a clean slate
+        // If partially seeded, wipe the database first using high-performance TRUNCATE CASCADE
         if (currentCount > 0) {
-            System.out.println("[QuantTrade] Partial seeding detected (" + currentCount + " stocks). Wiping database to avoid duplicates...");
-            strategyRepository.deleteAll();
-            stockRepository.deleteAll();
+            System.out.println("[QuantTrade] Partial seeding detected (" + currentCount + " stocks). Wiping database using SQL TRUNCATE to reset sequences...");
+            try {
+                jdbcTemplate.execute("TRUNCATE TABLE backtest_results CASCADE");
+                jdbcTemplate.execute("TRUNCATE TABLE backtests CASCADE");
+                jdbcTemplate.execute("TRUNCATE TABLE trades CASCADE");
+                jdbcTemplate.execute("TRUNCATE TABLE stock_prices CASCADE");
+                jdbcTemplate.execute("TRUNCATE TABLE strategy_indicators CASCADE");
+                jdbcTemplate.execute("TRUNCATE TABLE strategies CASCADE");
+                jdbcTemplate.execute("TRUNCATE TABLE stocks CASCADE");
+                System.out.println("[QuantTrade] Database successfully cleared!");
+            } catch (Exception e) {
+                System.err.println("[QuantTrade] SQL Truncate failed, falling back to repository delete: " + e.getMessage());
+                strategyRepository.deleteAll();
+                stockRepository.deleteAll();
+            }
         }
 
         // ── International stocks ───────────────────────────────────────────
