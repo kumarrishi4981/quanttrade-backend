@@ -3,8 +3,13 @@ package com.quanttrade.config;
 import com.quanttrade.model.*;
 import com.quanttrade.repository.*;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Date;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.*;
@@ -13,20 +18,31 @@ import java.util.*;
 public class DataLoader implements CommandLineRunner {
 
     private final StockRepository stockRepository;
-    private final StockPriceRepository stockPriceRepository;
     private final StrategyRepository strategyRepository;
+    private final JdbcTemplate jdbcTemplate;
 
-    public DataLoader(StockRepository stockRepository, StockPriceRepository stockPriceRepository, StrategyRepository strategyRepository) {
+    public DataLoader(StockRepository stockRepository, StrategyRepository strategyRepository, JdbcTemplate jdbcTemplate) {
         this.stockRepository = stockRepository;
-        this.stockPriceRepository = stockPriceRepository;
         this.strategyRepository = strategyRepository;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Override
     public void run(String... args) {
-        if (stockRepository.count() > 0) return; // Already seeded
+        long currentCount = stockRepository.count();
+        if (currentCount >= 28) {
+            System.out.println("[QuantTrade] Database already fully seeded (" + currentCount + " stocks). Skipping.");
+            return;
+        }
 
         System.out.println("[QuantTrade] Seeding database with stock data...");
+
+        // If partially seeded, wipe the database first to ensure a clean slate
+        if (currentCount > 0) {
+            System.out.println("[QuantTrade] Partial seeding detected (" + currentCount + " stocks). Wiping database to avoid duplicates...");
+            strategyRepository.deleteAll();
+            stockRepository.deleteAll();
+        }
 
         // ── International stocks ───────────────────────────────────────────
         String[][] intlStockData = {
@@ -89,17 +105,17 @@ public class DataLoader implements CommandLineRunner {
             stock = stockRepository.save(stock);
 
             List<StockPrice> prices = generatePriceHistory(stock, intlStartPrices[i], intlVolatilities[i], rng, false);
-            stockPriceRepository.saveAll(prices);
+            savePricesBatch(prices);
             System.out.println("  -> Loaded " + prices.size() + " price records for " + stock.getSymbol());
         }
 
-        // Seed Indian stocks (INR volumes — higher range)
+        // Seed Indian stocks (INR volumes ── higher range)
         for (int i = 0; i < indianStockData.length; i++) {
             Stock stock = new Stock(indianStockData[i][0], indianStockData[i][1], indianStockData[i][2], indianStockData[i][3]);
             stock = stockRepository.save(stock);
 
             List<StockPrice> prices = generatePriceHistory(stock, indianStartPrices[i], indianVolatilities[i], rng, true);
-            stockPriceRepository.saveAll(prices);
+            savePricesBatch(prices);
             System.out.println("  -> Loaded " + prices.size() + " price records for " + stock.getSymbol());
         }
 
@@ -128,17 +144,36 @@ public class DataLoader implements CommandLineRunner {
         bb.getIndicators().add(bbInd);
         strategyRepository.save(bb);
 
-        System.out.println("[QuantTrade] Database seeding complete! Loaded " + (intlStockData.length + indianStockData.length) + " stocks.");
+        System.out.println("[QuantTrade] Database seeding complete! Loaded 28 stocks.");
+    }
+
+    /**
+     * Efficiently saves historical stock prices in a single raw JDBC batch update.
+     */
+    private void savePricesBatch(List<StockPrice> prices) {
+        String sql = "INSERT INTO stock_prices (stock_id, date, open_price, high_price, low_price, close_price, volume) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+            @Override
+            public void setValues(PreparedStatement ps, int i) throws SQLException {
+                StockPrice price = prices.get(i);
+                ps.setLong(1, price.getStock().getId());
+                ps.setDate(2, Date.valueOf(price.getDate()));
+                ps.setDouble(3, price.getOpenPrice());
+                ps.setDouble(4, price.getHighPrice());
+                ps.setDouble(5, price.getLowPrice());
+                ps.setDouble(6, price.getClosePrice());
+                ps.setLong(7, price.getVolume());
+            }
+
+            @Override
+            public int getBatchSize() {
+                return prices.size();
+            }
+        });
     }
 
     /**
      * Generates ~2 years of daily OHLCV price history using a random walk model.
-     *
-     * @param stock      the stock entity
-     * @param startPrice initial price
-     * @param volatility daily volatility factor
-     * @param rng        seeded Random instance
-     * @param isIndian   if true, uses higher volume range typical of NSE (1M–10M)
      */
     private List<StockPrice> generatePriceHistory(Stock stock, double startPrice, double volatility, Random rng, boolean isIndian) {
         List<StockPrice> prices = new ArrayList<>();
@@ -146,7 +181,6 @@ public class DataLoader implements CommandLineRunner {
         LocalDate endDate = LocalDate.of(2024, 12, 31);
         double price = startPrice;
 
-        // Volume parameters differ between international and Indian stocks
         long volumeBase = isIndian ? 5_500_000L : 5_000_000L;
         long volumeSpread = isIndian ? 2_500_000L : 2_000_000L;
         long volumeFloor = isIndian ? 1_000_000L : 500_000L;
